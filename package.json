@@ -4,14 +4,19 @@
   "private": true,
   "description": "My Flower — booking revenue ledger. Upload a check-in .xlsx export and explore income by month, guest, room and country.",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "serve -s dist -l tcp://0.0.0.0:${PORT:-3000}"
   },
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "serve": "^14.2.4",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

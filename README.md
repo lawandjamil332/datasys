@@ -26,9 +26,32 @@ your machine.
 npm install
 npm run dev      # local development at http://localhost:5173
 npm run build    # production build in dist/
+npm start        # serve the production build (uses $PORT, default 3000)
+```
+
+## Deploy on Railway
+
+The repo is ready for [Railway](https://railway.com) as-is — `railway.json`
+tells it to build with `npm run build` and serve the `dist/` folder with
+`npm start` on Railway's `$PORT`.
+
+1. In Railway: **New Project → Deploy from GitHub repo** and pick this repo.
+2. Wait for the first build/deploy to go green.
+3. Open the service → **Settings → Networking → Generate Domain** to get a
+   public URL.
+
+Every push to the deployed branch redeploys automatically.
+
+Or with the [Railway CLI](https://docs.railway.com/guides/cli):
+
+```bash
+railway init
+railway up
+railway domain
 ```
 
 ## Stack
 
 - [React 18](https://react.dev) + [Vite](https://vitejs.dev)
 - [SheetJS (xlsx)](https://www.npmjs.com/package/xlsx) for reading Excel exports
+- [serve](https://www.npmjs.com/package/serve) for hosting the built app
