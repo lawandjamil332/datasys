@@ -3,11 +3,31 @@
 A small web app for the My Flower hotel: upload a check-in export (`.xlsx`)
 and get a clean booking revenue ledger.
 
+## Expected file
+
+A `Checkin_…xlsx` export with these columns (header names are matched loosely):
+
+`Book number · Guest name (Surname, Name) · Check-in · Check-out · Rooms ·
+Price · Booker country · Unit type · Duration (nights)`
+
+The file may contain several period blocks back to back — each with its own
+repeated header row, blank separator rows and a "Property Name / Property
+Number / Email / Dates / Total Revenue" summary block. Prices may be numbers
+or text like `31$`; countries are 2-letter codes (`iq`, `ir`, `gb`, …);
+multi-room bookings list their unit types together (`Quadruple Suite, Twin`).
+
 ## What it does
 
 - **Cleans the file automatically** — repeated header rows, blank lines and the
   "Property Name / Email / Total Revenue" summary blocks are removed; only rows
   with a real booking number, check-in date and price are kept.
+- **Removes duplicates** — the export's period blocks can overlap, so the same
+  booking number may appear twice; only the first occurrence is counted.
+- **Understands multi-room bookings** — the room-type filter matches each room
+  type inside a combined booking, "Room-nights sold" counts nights × rooms, and
+  the bookings table shows a ×2 / ×3 badge.
+- **Shows countries properly** — booker country codes become names with flags
+  (🇮🇶 Iraq instead of `IQ`).
 - **Summary cards** — total income, bookings, nights sold, average per booking.
 - **Monthly income ledger** — revenue per month with the best month highlighted.
 - **Filters** — search by guest or booking number, filter by room type, country

@@ -26,6 +26,7 @@ function toDate(v) {
 
 function parsePrice(v) {
   if (v == null) return null;
+  if (v instanceof Date) return null; // a date-formatted cell is never a price
   if (typeof v === "number") return isFinite(v) ? v : null;
   const cleaned = String(v).replace(/[^0-9.]/g, "");
   if (!cleaned) return null;
@@ -33,9 +34,10 @@ function parsePrice(v) {
   return isFinite(n) ? n : null;
 }
 
-function cleanWorkbook(workbook) {
+export function cleanWorkbook(workbook) {
   const rows = [];
-  const skipped = { junk: 0, badDate: 0, badPrice: 0 };
+  const skipped = { junk: 0, badDate: 0, badPrice: 0, duplicate: 0 };
+  const seenBooks = new Set();
   for (const sheetName of workbook.SheetNames) {
     const ws = workbook.Sheets[sheetName];
     const raw = XLSX.utils.sheet_to_json(ws, { defval: null });
@@ -56,6 +58,10 @@ function cleanWorkbook(workbook) {
       const price = parsePrice(get("price"));
       if (!checkIn) { skipped.badDate++; continue; }
       if (price == null) { skipped.badPrice++; continue; }
+      // the export's period blocks can overlap, so the same booking may
+      // appear twice — keep the first occurrence only
+      if (seenBooks.has(book)) { skipped.duplicate++; continue; }
+      seenBooks.add(book);
 
       let nights = parsePrice(get("duration"));
       if (!nights && checkOut) {
@@ -96,6 +102,28 @@ const fmtDate = (iso) => {
   const [y, m, d] = iso.split("-");
   return `${d} ${MONTHS[+m - 1]} ${y}`;
 };
+
+// Booker country arrives as a 2-letter ISO code ("iq", "ir", "gb", …)
+let regionNames = null;
+try {
+  regionNames = new Intl.DisplayNames(["en"], { type: "region" });
+} catch (e) { /* very old browser — codes are shown as-is */ }
+
+const countryName = (code) => {
+  if (!/^[A-Z]{2}$/.test(code)) return code;
+  try {
+    return (regionNames && regionNames.of(code)) || code;
+  } catch (e) {
+    return code;
+  }
+};
+const countryFlag = (code) => {
+  if (!/^[A-Z]{2}$/.test(code)) return "";
+  return String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0)));
+};
+
+// multi-room bookings list their room types together ("Quadruple Suite, Twin")
+const unitParts = (u) => u.split(",").map((s) => s.trim()).filter(Boolean);
 
 /* ------------------------------------------------------------------ */
 /* Storage (persists data between sessions, with graceful fallback)    */
@@ -202,12 +230,14 @@ export default function RevenueSystem() {
 
   const allUnits = useMemo(() => {
     if (!rows) return [];
-    return [...new Set(rows.map((r) => r.unit))].sort();
+    return [...new Set(rows.flatMap((r) => unitParts(r.unit)))].sort();
   }, [rows]);
 
   const allCountries = useMemo(() => {
     if (!rows) return [];
-    return [...new Set(rows.map((r) => r.country))].sort();
+    return [...new Set(rows.map((r) => r.country))].sort((a, b) =>
+      countryName(a).localeCompare(countryName(b))
+    );
   }, [rows]);
 
   const allMonths = useMemo(() => {
@@ -222,7 +252,7 @@ export default function RevenueSystem() {
     return rows.filter((r) => {
       if (guestSet && !guestSet.has(r.guest)) return false;
       if (q && !r.guest.toLowerCase().includes(q) && !r.book.includes(q)) return false;
-      if (unitFilter !== "All" && r.unit !== unitFilter) return false;
+      if (unitFilter !== "All" && !unitParts(r.unit).includes(unitFilter)) return false;
       if (countryFilter !== "All" && r.country !== countryFilter) return false;
       const mk = monthKey(r.checkIn);
       if (fromMonth && mk < fromMonth) return false;
@@ -232,15 +262,17 @@ export default function RevenueSystem() {
   }, [rows, search, selectedGuests, unitFilter, countryFilter, fromMonth, toMonth]);
 
   const stats = useMemo(() => {
+    // a 2-room booking sells 2 room-nights per night of the stay
+    const roomNights = (r) => (r.nights || 0) * (r.rooms || 1);
     const total = filtered.reduce((s, r) => s + r.price, 0);
-    const nights = filtered.reduce((s, r) => s + (r.nights || 0), 0);
+    const nights = filtered.reduce((s, r) => s + roomNights(r), 0);
     const byMonth = {};
     for (const r of filtered) {
       const k = monthKey(r.checkIn);
       if (!byMonth[k]) byMonth[k] = { revenue: 0, bookings: 0, nights: 0 };
       byMonth[k].revenue += r.price;
       byMonth[k].bookings += 1;
-      byMonth[k].nights += r.nights || 0;
+      byMonth[k].nights += roomNights(r);
     }
     const months = Object.entries(byMonth)
       .map(([k, v]) => ({ key: k, ...v }))
@@ -336,9 +368,9 @@ export default function RevenueSystem() {
           <span className="bloom big" aria-hidden="true">✿</span>
           <h2>Upload your check-in export</h2>
           <p>
-            Drop the .xlsx file here. Repeated headers, blank rows and the
-            "Property / Email / Total Revenue" blocks are removed automatically —
-            only real bookings are kept.
+            Drop the .xlsx file here. Repeated headers, blank rows, the
+            "Property / Email / Total Revenue" blocks and duplicate bookings are
+            removed automatically — only real bookings are kept.
           </p>
           <button className="primary" onClick={() => fileInputRef.current?.click()}>
             Choose file
@@ -351,6 +383,9 @@ export default function RevenueSystem() {
             <p className="cleannote">
               Loaded <strong>{rows.length.toLocaleString()}</strong> bookings ·
               removed {skipped.junk + skipped.badDate + skipped.badPrice} non-booking rows
+              {skipped.duplicate > 0 && (
+                <> · {skipped.duplicate} duplicate booking{skipped.duplicate > 1 ? "s" : ""}</>
+              )}
             </p>
           )}
           {error && <p className="error">{error}</p>}
@@ -366,7 +401,7 @@ export default function RevenueSystem() {
               <span className="value">{stats.count.toLocaleString()}</span>
             </div>
             <div className="card">
-              <span className="label">Nights sold</span>
+              <span className="label">Room-nights sold</span>
               <span className="value">{stats.nights.toLocaleString()}</span>
             </div>
             <div className="card">
@@ -406,7 +441,11 @@ export default function RevenueSystem() {
                 <span>Country</span>
                 <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)}>
                   <option>All</option>
-                  {allCountries.map((c) => <option key={c}>{c}</option>)}
+                  {allCountries.map((c) => (
+                    <option key={c} value={c}>
+                      {countryFlag(c) ? `${countryFlag(c)} ${countryName(c)}` : c}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label className="field">
@@ -515,8 +554,13 @@ export default function RevenueSystem() {
                       </td>
                       <td>{fmtDate(r.checkIn)}</td>
                       <td className="num">{r.nights}</td>
-                      <td>{r.unit}</td>
-                      <td>{r.country}</td>
+                      <td>
+                        {r.unit}
+                        {(r.rooms || 1) > 1 && <span className="roomsbadge">×{r.rooms}</span>}
+                      </td>
+                      <td title={r.country}>
+                        {countryFlag(r.country) ? `${countryFlag(r.country)} ${countryName(r.country)}` : r.country}
+                      </td>
                       <td className="num strong">{fmtMoney(r.price)}</td>
                     </tr>
                   ))}
@@ -689,6 +733,11 @@ th {
 td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .strong { font-weight: 600; }
+.roomsbadge {
+  margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  background: #F3E7D9; border: 1px solid var(--brass);
+  font-size: 11px; font-weight: 600; color: var(--ink);
+}
 .linky {
   background: none; border: none; padding: 0; color: var(--ink);
   text-decoration: underline; text-decoration-color: var(--line);
